@@ -55,12 +55,13 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const safeCollectors = Array.isArray(data?.collectors) ? data.collectors : [];
   const stats = data ? {
-    collectorsCount: data.collectors.length,
-    paymentsCount: data.collectors.reduce((acc, c) => acc + (c.numberOfPayments || 0), 0),
-    grossAmount: data.collectors.reduce((acc, c) => acc + (c.paymentAmount || 0), 0),
-    totalFees: data.collectors.reduce((acc, c) => acc + (c.totalFees || 0), 0),
-    withheld: data.collectors.reduce((acc, c) => acc + (c.amountWithheld || 0), 0)
+    collectorsCount: safeCollectors.length,
+    paymentsCount: safeCollectors.reduce((acc, c) => acc + (c.numberOfPayments || 0), 0),
+    grossAmount: safeCollectors.reduce((acc, c) => acc + (c.paymentAmount || 0), 0),
+    totalFees: safeCollectors.reduce((acc, c) => acc + (c.totalFees || 0), 0),
+    withheld: safeCollectors.reduce((acc, c) => acc + (c.amountWithheld || 0), 0)
   } : null;
 
   const extractTextFromPdf = async (file: File) => {
@@ -127,10 +128,27 @@ export default function App() {
       if (!response.ok) {
         throw new Error(result.error || "Failed to extract data");
       }
+
+      if (result?.ok === true && result?.message && !result?.collectors) {
+        throw new Error(
+          "Backend is in test mode. Replace the Lambda test response with real extraction logic for /api/extract."
+        );
+      }
+
+      if (!Array.isArray(result?.collectors)) {
+        throw new Error("Invalid API response: expected collectors array.");
+      }
+
+      const normalizedResult: ExtractedReport = {
+        reportType: result?.reportType === "MTD" ? "MTD" : "DAILY",
+        collectors: result.collectors,
+        reportDate: result?.reportDate,
+        reportTime: result?.reportTime,
+      };
       
-      setData(result);
-      if (result.reportType) {
-        setActiveTab(result.reportType);
+      setData(normalizedResult);
+      if (normalizedResult.reportType) {
+        setActiveTab(normalizedResult.reportType);
       }
     } catch (err: any) {
       const message = err?.message || "Failed to extract data";
