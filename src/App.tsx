@@ -36,6 +36,81 @@ interface ExtractedReport {
   reportTime?: string;
 }
 
+const currencyRegex = /\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})/g;
+
+function parseMoney(value: string | undefined) {
+  if (!value) return 0;
+  return Number(value.replace(/[$,]/g, "")) || 0;
+}
+
+function extractFirstDate(text: string) {
+  return text.match(/\b\d{2}\/\d{2}\/\d{4}\b/)?.[0] || "";
+}
+
+function extractTime(text: string) {
+  return text.match(/\b\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)\b/i)?.[0] || "";
+}
+
+function parseCollectorBlock(block: string): CollectorData | null {
+  const collectorNumber = block.match(/\b([A-Z0-9]{1,4})\s+Collector Number\b/i)?.[1] || "";
+  if (!collectorNumber) return null;
+
+  const firstLine = block
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.includes("Collector Number")) || "";
+
+  const firstLineAmounts = firstLine.match(currencyRegex) || [];
+
+  const numberOfPaymentsLine = block.match(/Number of payments[^\n]*/i)?.[0] || "";
+  const numberOfPaymentsMatch = numberOfPaymentsLine.match(/(\d+)\s*$/);
+  const numberOfPayments = Number(numberOfPaymentsMatch?.[1] || 0);
+  const commissionValues = numberOfPaymentsLine.match(currencyRegex) || [];
+
+  const totalFeesMatch = block.match(/(\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))\s+Total Fees/i);
+
+  let amountWithheld = 0;
+  const withheldSectionMatch = block.match(/Amount Withheld([\s\S]*)/i);
+  if (withheldSectionMatch?.[1]) {
+    const withheldValues = withheldSectionMatch[1].match(currencyRegex) || [];
+    amountWithheld = withheldValues
+      .map(parseMoney)
+      .reduce((max, n) => (n > max ? n : max), 0);
+  }
+
+  return {
+    collectorNumber,
+    numberOfPayments,
+    paymentAmount: parseMoney(firstLineAmounts[0]),
+    paidPrincipal: parseMoney(firstLineAmounts[1]),
+    interest: parseMoney(firstLineAmounts[2]),
+    commissionPrin: parseMoney(commissionValues[0]),
+    commissionInt: parseMoney(commissionValues[1]),
+    totalFees: parseMoney(totalFeesMatch?.[1]),
+    amountWithheld,
+  };
+}
+
+function parseProCollectText(text: string): ExtractedReport {
+  const normalizedText = text.replace(/\r/g, "");
+  const reportType: "DAILY" | "MTD" = /MTD|Month\s*To\s*Date/i.test(normalizedText) ? "MTD" : "DAILY";
+  const blocks = normalizedText
+    .split(/--+/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+
+  const collectors = blocks
+    .map(parseCollectorBlock)
+    .filter((collector): collector is CollectorData => Boolean(collector));
+
+  return {
+    reportType,
+    collectors,
+    reportDate: extractFirstDate(normalizedText),
+    reportTime: extractTime(normalizedText),
+  };
+}
+
 export default function App() {
   const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
   const extractEndpoint = `${apiBaseUrl}/api/extract`;
@@ -83,6 +158,17 @@ export default function App() {
 
   const handleExtract = async () => {
     if (!inputText.trim() && !uploadedFile) return;
+
+    if (inputText.trim()) {
+      const localResult = parseProCollectText(inputText);
+      if (localResult.collectors.length > 0) {
+        setData(localResult);
+        setActiveTab(localResult.reportType);
+        setError(null);
+        setInfoMessage("Processed locally without AI.");
+        return;
+      }
+    }
 
     const requestPayload = {
       textContent: inputText,
@@ -152,6 +238,16 @@ export default function App() {
       }
     } catch (err: any) {
       const message = err?.message || "Failed to extract data";
+      if (inputText.trim()) {
+        const localResult = parseProCollectText(inputText);
+        if (localResult.collectors.length > 0) {
+          setData(localResult);
+          setActiveTab(localResult.reportType);
+          setError(null);
+          setInfoMessage("AI unavailable; processed locally without AI.");
+          return;
+        }
+      }
       if (message.includes("Failed to fetch")) {
         setError(
           "Network/CORS error or payload too large. If you uploaded a PDF, try a smaller file (Lambda URL has strict payload limits) or paste extracted text."
