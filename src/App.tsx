@@ -44,7 +44,19 @@ function parseMoney(value: string | undefined) {
 }
 
 function extractFirstDate(text: string) {
-  return text.match(/\b\d{2}\/\d{2}\/\d{4}\b/)?.[0] || "";
+  const rawDate = text.match(/\b\d{2}\/\d{2}\/\d{4}\b/)?.[0] || "";
+  if (!rawDate) return "";
+
+  const [mm, dd, yyyy] = rawDate.split("/").map(Number);
+  if (!mm || !dd || !yyyy) return rawDate;
+
+  const date = new Date(yyyy, mm - 1, dd);
+  date.setDate(date.getDate() - 1);
+
+  const outMm = String(date.getMonth() + 1).padStart(2, "0");
+  const outDd = String(date.getDate()).padStart(2, "0");
+  const outYyyy = String(date.getFullYear());
+  return `${outMm}/${outDd}/${outYyyy}`;
 }
 
 function extractTime(text: string) {
