@@ -99,9 +99,18 @@ function parseProCollectText(text: string): ExtractedReport {
     .map((b) => b.trim())
     .filter(Boolean);
 
-  const collectors = blocks
+  let collectors = blocks
     .map(parseCollectorBlock)
     .filter((collector): collector is CollectorData => Boolean(collector));
+
+  if (reportType === "DAILY") {
+    collectors = collectors.map((collector) => ({
+      ...collector,
+      // For DAILY text reports, business output expects this value under Comm. Prin.
+      commissionPrin: collector.amountWithheld,
+      amountWithheld: 0,
+    }));
+  }
 
   return {
     reportType,
