@@ -1,0 +1,456 @@
+import { useState, useRef } from "react";
+import { 
+  FileText, 
+  Upload, 
+  Download, 
+  Trash2, 
+  CheckCircle2, 
+  AlertCircle,
+  Loader2,
+  Table as TableIcon
+} from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+import * as XLSX from "xlsx";
+import { cn } from "@/src/lib/utils";
+
+interface CollectorData {
+  collectorNumber: string;
+  numberOfPayments: number;
+  paymentAmount: number;
+  paidPrincipal: number;
+  interest: number;
+  commissionPrin?: number;
+  commissionInt?: number;
+  totalFees: number;
+  amountWithheld: number;
+}
+
+interface ExtractedReport {
+  reportType: "DAILY" | "MTD";
+  collectors: CollectorData[];
+  reportDate?: string;
+  reportTime?: string;
+}
+
+export default function App() {
+  const [inputText, setInputText] = useState("");
+  const [data, setData] = useState<ExtractedReport | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"DAILY" | "MTD">("DAILY");
+  const [uploadedFile, setUploadedFile] = useState<{ name: string, base64: string, type: string } | null>(null);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const stats = data ? {
+    collectorsCount: data.collectors.length,
+    paymentsCount: data.collectors.reduce((acc, c) => acc + (c.numberOfPayments || 0), 0),
+    grossAmount: data.collectors.reduce((acc, c) => acc + (c.paymentAmount || 0), 0),
+    totalFees: data.collectors.reduce((acc, c) => acc + (c.totalFees || 0), 0),
+    withheld: data.collectors.reduce((acc, c) => acc + (c.amountWithheld || 0), 0)
+  } : null;
+
+  const handleExtract = async () => {
+    if (!inputText.trim() && !uploadedFile) return;
+    
+    setIsExtracting(true);
+    setError(null);
+    
+    try {
+      const response = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          textContent: inputText,
+          fileData: uploadedFile?.base64,
+          mimeType: uploadedFile?.type
+        }),
+      });
+      
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || "Failed to extract data");
+      }
+      
+      const result = await response.json();
+      setData(result);
+      if (result.reportType) {
+        setActiveTab(result.reportType);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type === "application/pdf") {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64 = (event.target?.result as string).split(",")[1];
+        setUploadedFile({
+          name: file.name,
+          base64: base64,
+          type: file.type
+        });
+        setInputText(""); // Clear text if PDF is uploaded
+      };
+      reader.readAsDataURL(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        setInputText(text);
+        setUploadedFile(null);
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleExport = () => {
+    if (!data || data.collectors.length === 0) return;
+    
+    // Flatten data for Excel
+    const exportData = data.collectors.map(c => ({
+      "Date": data.reportDate || "",
+      "Collector #": c.collectorNumber,
+      "Payments": c.numberOfPayments,
+      "Payment Amt": c.paymentAmount,
+      "Principal": c.paidPrincipal,
+      "Interest": c.interest,
+      "Comm. Prin": c.commissionPrin || 0,
+      "Comm. Int": c.commissionInt || 0,
+      "Total Fees": c.totalFees,
+      "Amount Withheld": c.amountWithheld
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Collector Summary");
+    XLSX.writeFile(wb, `Collector_${data.reportType}_${data.reportDate || "Report"}.xlsx`);
+  };
+
+  const clearData = () => {
+    setInputText("");
+    setUploadedFile(null);
+    setData(null);
+    setError(null);
+  };
+
+  return (
+    <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-800 overflow-hidden">
+      {/* Navbar */}
+      <nav className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shrink-0 shadow-sm z-20">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center">
+            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+          </div>
+          <span className="font-bold text-lg tracking-tight text-slate-900">
+            ProCollect <span className="text-blue-600">Parser</span>
+          </span>
+          <div className="h-6 w-px bg-slate-200 mx-4" />
+          <div className="flex bg-slate-100 p-1 rounded-lg">
+            <button 
+              onClick={() => setActiveTab("DAILY")}
+              className={cn(
+                "px-4 py-1 text-xs font-bold rounded-md transition-all",
+                activeTab === "DAILY" ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              DAILY
+            </button>
+            <button 
+              onClick={() => setActiveTab("MTD")}
+              className={cn(
+                "px-4 py-1 text-xs font-bold rounded-md transition-all",
+                activeTab === "MTD" ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              MTD SUMMARY
+            </button>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium text-sm border border-slate-200 transition-colors"
+          >
+            <Upload size={16} /> 
+            {uploadedFile ? uploadedFile.name : "Upload PDF/Text"}
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              className="hidden" 
+              accept=".txt,.csv,.pdf" 
+              onChange={handleFileUpload} 
+            />
+          </button>
+          <button 
+            onClick={handleExport}
+            disabled={!data}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm shadow-sm transition-all",
+              data 
+                ? "bg-green-600 hover:bg-green-700 text-white shadow-green-200" 
+                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+            )}
+          >
+            <Download size={16} /> 
+            Export to Excel
+          </button>
+        </div>
+      </nav>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <aside className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col gap-6 shrink-0 overflow-y-auto">
+          <section>
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Current Session</h3>
+            <p className="text-xl font-bold text-slate-900 leading-tight">
+              {data ? (data.reportType === "MTD" ? "Month To Date Summary" : "Daily Summary") : "No Active Report"}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              {data ? (
+                <>
+                  <span className="font-bold text-blue-600">{data.reportType}</span>
+                  {data.reportDate && ` • ${data.reportDate}`}
+                  {data.reportTime && ` • ${data.reportTime}`}
+                </>
+              ) : "Waiting for input..."}
+            </p>
+          </section>
+
+          <section className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase mb-4">Summary Stats</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between">
+                <span className="text-sm text-slate-600">Collectors</span>
+                <span className="text-sm font-bold">{stats?.collectorsCount || "--"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-slate-600">Total Payments</span>
+                <span className="text-sm font-bold">{stats?.paymentsCount || "--"}</span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200 pt-3 mt-3">
+                <span className="text-sm text-slate-600">Gross Collected</span>
+                <span className="text-sm font-bold text-blue-600">
+                  {stats ? `$${stats.grossAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "--"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-slate-600">Agency Fees</span>
+                <span className="text-sm font-bold text-red-500">
+                  {stats ? `$${stats.totalFees.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "--"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-slate-600">Net Withheld</span>
+                <span className="text-sm font-bold text-slate-900">
+                  {stats ? `$${stats.withheld.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "--"}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <div className="mt-auto p-4 bg-blue-50 border border-blue-100 rounded-lg text-[11px] leading-relaxed text-blue-800">
+            <span className="font-bold block mb-1">PRO TIP:</span>
+            Switch between DAILY and MTD modes at the top. The system will automatically detect the report type from your text paste.
+          </div>
+        </aside>
+
+        {/* Main Content Area */}
+        <main className="flex-1 p-8 overflow-hidden flex flex-col min-w-0">
+          <header className="mb-6 flex justify-between items-end shrink-0">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">
+                {activeTab} Summary Parsing
+              </h2>
+              <p className="text-sm text-slate-500">Paste your raw text content below</p>
+            </div>
+            <div className="flex items-center gap-3">
+              {inputText && (
+                <button 
+                  onClick={clearData}
+                  className="text-slate-400 hover:text-red-500 transition-colors p-2"
+                  title="Clear content"
+                >
+                  <Trash2 size={20} />
+                </button>
+              )}
+              <button
+                onClick={handleExtract}
+                disabled={isExtracting || (!inputText.trim() && !uploadedFile)}
+                className={cn(
+                  "flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-md",
+                  (!inputText.trim() && !uploadedFile) || isExtracting
+                    ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200 hover:-translate-y-0.5 active:translate-y-0"
+                )}
+              >
+                {isExtracting ? (
+                  <>
+                    <Loader2 className="animate-spin" size={18} />
+                    Extracting...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={18} />
+                    Process {activeTab} Report
+                  </>
+                )}
+              </button>
+            </div>
+          </header>
+
+          <div className="flex-1 min-h-0 flex flex-col gap-6 overflow-hidden">
+            {/* Input Panel */}
+            <div className="h-1/3 flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden shrink-0">
+              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+                <FileText size={14} className="text-slate-400" />
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  {uploadedFile ? "PDF Document Ready" : "Raw Content Input"}
+                </span>
+              </div>
+              {uploadedFile ? (
+                <div className="flex-1 flex flex-col items-center justify-center bg-blue-50/50">
+                   <div className="flex items-center gap-3 p-4 bg-white border border-blue-200 rounded-xl shadow-sm">
+                      <FileText className="text-blue-600" size={32} />
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">{uploadedFile.name}</p>
+                        <p className="text-[10px] text-slate-500 uppercase tracking-widest">PDF Document Loaded</p>
+                      </div>
+                      <button 
+                        onClick={() => setUploadedFile(null)}
+                        className="ml-4 text-slate-400 hover:text-red-500"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                   </div>
+                   <p className="text-[11px] text-blue-600 mt-4 font-medium italic">Ready to process visual data...</p>
+                </div>
+              ) : (
+                <textarea
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  placeholder={`Paste the content of your ${activeTab} report here...`}
+                  className="flex-1 w-full p-4 font-mono text-xs focus:outline-none resize-none bg-transparent placeholder:opacity-40"
+                />
+              )}
+            </div>
+
+            {/* Table Panel */}
+            <div className="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex justify-between items-center h-10">
+                <div className="flex items-center gap-2">
+                  <TableIcon size={14} className="text-slate-400" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    {activeTab} Records Table
+                  </span>
+                </div>
+                {error && (
+                  <div className="flex items-center gap-1.5 text-red-500 font-bold text-[11px]">
+                    <AlertCircle size={12} />
+                    FAILED: {error}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-auto">
+                <AnimatePresence mode="wait">
+                  {!data ? (
+                    <motion.div 
+                      key="empty"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="h-full flex flex-col items-center justify-center text-slate-300 gap-4 py-20"
+                    >
+                      <TableIcon size={64} strokeWidth={1} />
+                      <p className="text-sm font-medium">Capture results by clicking "Process Report"</p>
+                    </motion.div>
+                  ) : (
+                    <motion.table 
+                      key="table"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="w-full text-left border-collapse"
+                    >
+                      <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 z-10 shadow-sm">
+                        <tr className="text-[9px] uppercase tracking-wider font-bold text-slate-500">
+                          <th className="px-4 py-3 border-r border-slate-200">Coll #</th>
+                          <th className="px-4 py-3 text-right">Payment</th>
+                          <th className="px-4 py-3 text-right">Principal</th>
+                          <th className="px-4 py-3 text-right">Interest</th>
+                          <th className="px-4 py-3 text-right">Comm. Prin</th>
+                          <th className="px-4 py-3 text-right">Comm. Int</th>
+                          <th className="px-4 py-3 text-center">Qty</th>
+                          <th className="px-4 py-3 text-right">Fees</th>
+                          <th className="px-4 py-3 text-right">Withheld</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-xs text-slate-700 divide-y divide-slate-100">
+                        {data.collectors.map((collector, idx) => (
+                          <motion.tr 
+                            initial={{ opacity: 0, y: 4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: idx * 0.02 }}
+                            key={idx} 
+                            className="hover:bg-slate-50 transition-colors group"
+                          >
+                            <td className="px-4 py-3 font-mono font-bold text-slate-900 border-r border-slate-100 bg-slate-50/30">
+                              {collector.collectorNumber}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums">
+                              ${collector.paymentAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-500">
+                              ${collector.paidPrincipal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-500">
+                              ${collector.interest.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums text-blue-500/70">
+                              ${(collector.commissionPrin || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums text-blue-500/70">
+                              ${(collector.commissionInt || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3 text-center font-bold">
+                              {collector.numberOfPayments}
+                            </td>
+                            <td className="px-4 py-3 text-right font-bold text-red-600 tabular-nums bg-red-50/10">
+                              ${collector.totalFees.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums font-medium bg-green-50/10">
+                              ${collector.amountWithheld.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                          </motion.tr>
+                        ))}
+                      </tbody>
+                    </motion.table>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {data && (
+                <div className="px-6 py-2.5 bg-slate-100 border-t border-slate-200 flex justify-between items-center shrink-0">
+                  <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                    Ready for Excel Export • {data.collectors.length} Collectors Parsed
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+

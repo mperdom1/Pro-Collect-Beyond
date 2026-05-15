@@ -1,0 +1,6 @@
+{
+  "name": "ProCollect Data Extractor",
+  "description": "A professional tool for extracting structured data from Daily Collector Summary reports and exporting to Excel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
