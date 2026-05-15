@@ -15,5 +15,5 @@ frontend:
     paths:
       - node_modules/**/*
 
-# Configuración para el backend (SSR/Express) en Amplify
-# Nota: Amplify Hosting detectará automáticamente el script "start" de tu package.json
+# Este archivo despliega solo artefactos estáticos de frontend desde dist.
+# Amplify Hosting estático NO ejecuta server.ts (Express).

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, type ChangeEvent } from "react";
 import { 
   FileText, 
   Upload, 
@@ -33,6 +33,9 @@ interface ExtractedReport {
 }
 
 export default function App() {
+  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+  const extractEndpoint = `${apiBaseUrl}/api/extract`;
+
   const [inputText, setInputText] = useState("");
   const [data, setData] = useState<ExtractedReport | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -57,7 +60,7 @@ export default function App() {
     setError(null);
     
     try {
-      const response = await fetch("/api/extract", {
+      const response = await fetch(extractEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -71,6 +74,13 @@ export default function App() {
       if (!contentType || !contentType.includes("application/json")) {
         const text = await response.text();
         console.error("Non-JSON response received:", text.slice(0, 500));
+        if (response.status === 404) {
+          throw new Error(
+            apiBaseUrl
+              ? `API endpoint not found at ${extractEndpoint}. Verify your deployed backend route /api/extract.`
+              : "API endpoint /api/extract was not found. In Amplify static hosting, configure VITE_API_BASE_URL to point to your deployed backend."
+          );
+        }
         throw new Error(`Server returned non-JSON response (${response.status}). The payload might be too large or the server encountered an error.`);
       }
 
@@ -91,7 +101,7 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
