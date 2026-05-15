@@ -9,7 +9,13 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: '10mb' }));
+// Request logger middleware
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
+app.use(express.json({ limit: '20mb' }));
 
 // Initialize Gemini
 const ai = new GoogleGenAI({
@@ -22,8 +28,20 @@ const ai = new GoogleGenAI({
 });
 
 // API Routes
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", env: process.env.NODE_ENV });
+});
+
 app.post("/api/extract", async (req, res) => {
+  console.log("POST /api/extract request received");
   const { textContent, fileData, mimeType } = req.body;
+  console.log("Body metadata:", { 
+    hasText: !!textContent, 
+    hasFile: !!fileData, 
+    mimeType,
+    textLength: textContent?.length || 0,
+    fileLength: fileData?.length || 0
+  });
 
   try {
     const contents: any[] = [];
@@ -77,7 +95,7 @@ app.post("/api/extract", async (req, res) => {
     }
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview", 
+      model: "gemini-2.0-flash", 
       contents: [{ role: "user", parts: contents }],
       config: {
         responseMimeType: "application/json",
@@ -103,8 +121,8 @@ app.post("/api/extract", async (req, res) => {
                 required: ["collectorNumber"]
               }
             },
-            reportDate: { type: Type.STRING },
-            reportTime: { type: Type.STRING }
+            reportDate: { type: Type.STRING, description: "The date of the report, e.g., 04/24/2026" },
+            reportTime: { type: Type.STRING, description: "The time of the report if available" }
           }
         }
       }
@@ -132,12 +150,13 @@ async function startServer() {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
+      console.log(`Catch-all route hit for: ${req.url}`);
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
   });
 }
 

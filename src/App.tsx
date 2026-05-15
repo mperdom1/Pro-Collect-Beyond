@@ -67,12 +67,19 @@ export default function App() {
         }),
       });
       
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        console.error("Non-JSON response received:", text.slice(0, 500));
+        throw new Error(`Server returned non-JSON response (${response.status}). The payload might be too large or the server encountered an error.`);
+      }
+
+      const result = await response.json();
+      
       if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "Failed to extract data");
+        throw new Error(result.error || "Failed to extract data");
       }
       
-      const result = await response.json();
       setData(result);
       if (result.reportType) {
         setActiveTab(result.reportType);
