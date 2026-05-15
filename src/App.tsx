@@ -11,7 +11,11 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import * as XLSX from "xlsx";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { cn } from "@/src/lib/utils";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 interface CollectorData {
   collectorNumber: string;
@@ -35,12 +39,17 @@ interface ExtractedReport {
 export default function App() {
   const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
   const extractEndpoint = `${apiBaseUrl}/api/extract`;
-  const maxPdfSizeBytes = 4.5 * 1024 * 1024;
+  // Lambda Function URL buffered payload limit is ~6 MB. Base64 adds ~33% overhead,
+  // plus JSON wrapper, so keep a conservative raw file cap.
+  const maxPdfSizeBytes = 3.8 * 1024 * 1024;
+  const maxRequestBodyBytes = 5_500_000;
 
   const [inputText, setInputText] = useState("");
   const [data, setData] = useState<ExtractedReport | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isPreparingFile, setIsPreparingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"DAILY" | "MTD">("DAILY");
   const [uploadedFile, setUploadedFile] = useState<{ name: string, base64: string, type: string } | null>(null);
   
@@ -54,21 +63,49 @@ export default function App() {
     withheld: data.collectors.reduce((acc, c) => acc + (c.amountWithheld || 0), 0)
   } : null;
 
+  const extractTextFromPdf = async (file: File) => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const pages: string[] = [];
+
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => ("str" in item ? item.str : ""))
+        .join(" ");
+      pages.push(pageText);
+    }
+
+    return pages.join("\n").trim();
+  };
+
   const handleExtract = async () => {
     if (!inputText.trim() && !uploadedFile) return;
+
+    const requestPayload = {
+      textContent: inputText,
+      fileData: uploadedFile?.base64,
+      mimeType: uploadedFile?.type,
+    };
+    const estimatedBodySize = JSON.stringify(requestPayload).length;
+
+    if (estimatedBodySize > maxRequestBodyBytes) {
+      setError(
+        "File too large for current serverless request limit. Use a smaller PDF or paste extracted text."
+      );
+      return;
+    }
     
     setIsExtracting(true);
     setError(null);
+    setInfoMessage(null);
     
     try {
       const response = await fetch(extractEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          textContent: inputText,
-          fileData: uploadedFile?.base64,
-          mimeType: uploadedFile?.type
-        }),
+        body: JSON.stringify(requestPayload),
       });
       
       const contentType = response.headers.get("content-type");
@@ -109,33 +146,44 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setError(null);
-
-    if (file.type === "application/pdf" && file.size > maxPdfSizeBytes) {
-      setUploadedFile(null);
-      setInputText("");
-      setError(
-        "This PDF is too large for the current serverless payload limit. Use a smaller PDF or paste extracted text."
-      );
-      return;
-    }
+    setInfoMessage(null);
 
     if (file.type === "application/pdf") {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64 = (event.target?.result as string).split(",")[1];
-        setUploadedFile({
-          name: file.name,
-          base64: base64,
-          type: file.type
-        });
-        setInputText(""); // Clear text if PDF is uploaded
-      };
-      reader.readAsDataURL(file);
+      setIsPreparingFile(true);
+      try {
+        if (file.size > maxPdfSizeBytes) {
+          const extractedText = await extractTextFromPdf(file);
+          if (!extractedText) {
+            throw new Error("No readable text found in the PDF.");
+          }
+          setUploadedFile(null);
+          setInputText(extractedText);
+          setInfoMessage("Large PDF detected: converted to text automatically for serverless processing.");
+        } else {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const base64 = (event.target?.result as string).split(",")[1];
+            setUploadedFile({
+              name: file.name,
+              base64: base64,
+              type: file.type
+            });
+            setInputText(""); // Clear text if PDF is uploaded
+          };
+          reader.readAsDataURL(file);
+        }
+      } catch (err: any) {
+        setUploadedFile(null);
+        setInputText("");
+        setError(err?.message || "Could not read PDF. Try another file or paste text.");
+      } finally {
+        setIsPreparingFile(false);
+      }
     } else {
       const reader = new FileReader();
       reader.onload = (event) => {
@@ -175,6 +223,7 @@ export default function App() {
     setUploadedFile(null);
     setData(null);
     setError(null);
+    setInfoMessage(null);
   };
 
   return (
@@ -321,18 +370,18 @@ export default function App() {
               )}
               <button
                 onClick={handleExtract}
-                disabled={isExtracting || (!inputText.trim() && !uploadedFile)}
+                disabled={isExtracting || isPreparingFile || (!inputText.trim() && !uploadedFile)}
                 className={cn(
                   "flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-md",
-                  (!inputText.trim() && !uploadedFile) || isExtracting
+                  (!inputText.trim() && !uploadedFile) || isExtracting || isPreparingFile
                     ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                     : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200 hover:-translate-y-0.5 active:translate-y-0"
                 )}
               >
-                {isExtracting ? (
+                {isExtracting || isPreparingFile ? (
                   <>
                     <Loader2 className="animate-spin" size={18} />
-                    Extracting...
+                    {isPreparingFile ? "Preparing PDF..." : "Extracting..."}
                   </>
                 ) : (
                   <>
@@ -393,6 +442,11 @@ export default function App() {
                   <div className="flex items-center gap-1.5 text-red-500 font-bold text-[11px]">
                     <AlertCircle size={12} />
                     FAILED: {error}
+                  </div>
+                )}
+                {!error && infoMessage && (
+                  <div className="text-blue-600 font-bold text-[11px]">
+                    INFO: {infoMessage}
                   </div>
                 )}
               </div>
