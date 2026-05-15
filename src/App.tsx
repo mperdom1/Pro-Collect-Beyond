@@ -35,6 +35,7 @@ interface ExtractedReport {
 export default function App() {
   const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
   const extractEndpoint = `${apiBaseUrl}/api/extract`;
+  const maxPdfSizeBytes = 4.5 * 1024 * 1024;
 
   const [inputText, setInputText] = useState("");
   const [data, setData] = useState<ExtractedReport | null>(null);
@@ -95,7 +96,14 @@ export default function App() {
         setActiveTab(result.reportType);
       }
     } catch (err: any) {
-      setError(err.message);
+      const message = err?.message || "Failed to extract data";
+      if (message.includes("Failed to fetch")) {
+        setError(
+          "Network/CORS error or payload too large. If you uploaded a PDF, try a smaller file (Lambda URL has strict payload limits) or paste extracted text."
+        );
+      } else {
+        setError(message);
+      }
     } finally {
       setIsExtracting(false);
     }
@@ -104,6 +112,17 @@ export default function App() {
   const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setError(null);
+
+    if (file.type === "application/pdf" && file.size > maxPdfSizeBytes) {
+      setUploadedFile(null);
+      setInputText("");
+      setError(
+        "This PDF is too large for the current serverless payload limit. Use a smaller PDF or paste extracted text."
+      );
+      return;
+    }
 
     if (file.type === "application/pdf") {
       const reader = new FileReader();
